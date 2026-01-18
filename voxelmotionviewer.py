@@ -6,6 +6,7 @@ Requirements:
 
 Usage:
     python pyvista_interactive_view_with_rotation_history.py
+    python pyvista_interactive_view_with_rotation_history.py --projection-output motion.pgm
 
 Description:
     1) Loads voxel_grid.bin (written by your C++ code).
@@ -16,8 +17,10 @@ Description:
        so you can orbit, zoom, and pan with the mouse.
     6) On closing the window, saves a 1920×1080 screenshot named 'voxel_####.png'
        in a 'screenshots/' folder, so you can keep a history of runs.
+    7) Optionally exports a 2D projection image (PGM) for motion-only visualization.
 """
 
+import argparse
 import os
 import re
 import math
@@ -158,11 +161,75 @@ def get_next_image_index(folder, prefix="voxel_", suffix=".png"):
     return max_index + 1
 
 
+def project_voxel_grid(voxel_grid, axis="z", mode="max"):
+    axis_map = {"z": 0, "y": 1, "x": 2}
+    axis_index = axis_map[axis]
+    if mode == "sum":
+        projection = np.sum(voxel_grid, axis=axis_index)
+    else:
+        projection = np.max(voxel_grid, axis=axis_index)
+    return projection
+
+
+def normalize_projection(projection, percentile=99.5):
+    if projection.size == 0:
+        return np.zeros_like(projection, dtype=np.uint8)
+    clip_value = np.percentile(projection, percentile)
+    if clip_value <= 0:
+        return np.zeros_like(projection, dtype=np.uint8)
+    scaled = np.clip(projection / clip_value, 0.0, 1.0)
+    return (scaled * 255).astype(np.uint8)
+
+
+def save_pgm(path, image):
+    height, width = image.shape
+    header = f"P5\n{width} {height}\n255\n".encode("ascii")
+    with open(path, "wb") as f:
+        f.write(header)
+        f.write(image.tobytes())
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Voxel grid viewer and projection exporter.")
+    parser.add_argument("--voxel-grid", default="voxel_grid.bin", help="Path to voxel_grid.bin")
+    parser.add_argument(
+        "--projection-output",
+        help="Optional PGM output path for a 2D projection image.",
+    )
+    parser.add_argument(
+        "--projection-axis",
+        choices=("x", "y", "z"),
+        default="z",
+        help="Axis to project along (matches viewer's Z-up convention).",
+    )
+    parser.add_argument(
+        "--projection-mode",
+        choices=("max", "sum"),
+        default="max",
+        help="Projection mode for 2D image.",
+    )
+    parser.add_argument(
+        "--projection-percentile",
+        type=float,
+        default=99.5,
+        help="Percentile used to normalize the projection image.",
+    )
+    args = parser.parse_args()
+
     # 1) Load the voxel grid
-    voxel_grid, vox_size = load_voxel_grid("voxel_grid.bin")
+    voxel_grid, vox_size = load_voxel_grid(args.voxel_grid)
     print("Loaded voxel grid:", voxel_grid.shape, "voxel_size=", vox_size)
     print("Max voxel value:", voxel_grid.max())
+
+    if args.projection_output:
+        projection = project_voxel_grid(
+            voxel_grid,
+            axis=args.projection_axis,
+            mode=args.projection_mode,
+        )
+        projection_uint8 = normalize_projection(projection, percentile=args.projection_percentile)
+        save_pgm(args.projection_output, projection_uint8)
+        print(f"[Info] Saved projection image to {args.projection_output}")
 
     # 2) Define the grid center (x,y,z)
     grid_center = np.array([30, 0, 14000], dtype=np.float32)
