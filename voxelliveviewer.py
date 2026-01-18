@@ -10,6 +10,7 @@ Usage examples:
     python voxelliveviewer.py --list-devices
     python voxelliveviewer.py --device 0
     python voxelliveviewer.py --file /path/to/video.mp4
+    python voxelliveviewer.py --device 0 --motion-only --motion-output motion.mp4
 
 If no device or file is provided, the script will prompt you to choose.
 Press "q" in the PyVista window to quit.
@@ -107,6 +108,9 @@ def main() -> None:
     parser.add_argument("--grid-height", type=int, default=48, help="Voxel grid height")
     parser.add_argument("--depth", type=int, default=32, help="Voxel depth")
     parser.add_argument("--threshold", type=float, default=0.1, help="Brightness threshold")
+    parser.add_argument("--motion-only", action="store_true", help="Show motion-only view (2D)")
+    parser.add_argument("--motion-threshold", type=int, default=25, help="Motion diff threshold")
+    parser.add_argument("--motion-output", type=str, help="Optional output video file (MP4)")
     args = parser.parse_args()
 
     if args.list_devices:
@@ -128,6 +132,44 @@ def main() -> None:
         source = prompt_for_source()
 
     cap = open_capture(source)
+
+    if args.motion_only:
+        prev_gray = None
+        writer = None
+        if args.motion_output:
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            writer = cv2.VideoWriter(args.motion_output, fourcc, fps, (width, height), False)
+
+        try:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                if prev_gray is None:
+                    prev_gray = gray
+                    continue
+
+                diff = cv2.absdiff(prev_gray, gray)
+                _, motion = cv2.threshold(diff, args.motion_threshold, 255, cv2.THRESH_TOZERO)
+                prev_gray = gray
+
+                cv2.imshow("Motion only", motion)
+                if writer is not None:
+                    writer.write(motion)
+
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+        finally:
+            cap.release()
+            if writer is not None:
+                writer.release()
+            cv2.destroyAllWindows()
+        return
 
     plotter = pv.Plotter()
     plotter.set_background("black")
